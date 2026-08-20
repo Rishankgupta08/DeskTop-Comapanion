@@ -1,0 +1,88 @@
+# ─── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+target/
+
+# ─── Build output ─────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+
+# ─── Secrets and credentials ─────────────────────────────────────────────────
+# CRITICAL: API keys must live in the OS keychain only [DR-011, ADR-009]
+# If any fallback plaintext credential file is ever added, it must be listed here.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+keychain-fallback/
+credentials.toml
+credentials.json
+
+# ─── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+._*
+
+# ─── IDE / editor files ───────────────────────────────────────────────────────
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Tauri build artifacts ────────────────────────────────────────────────────
+src-tauri/target/
+src-tauri/WixTools/
+src-tauri/Frameworks/
+gen/
+
+# ─── Rust ──────────────────────────────────────────────────────────────────────
+**/*.rs.bk
+Cargo.lock                  # keep for binaries; remove this line if lib-only
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+# Local crash/error logs are permitted [DR-028] but should not be committed
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+openmate-crash.log
+openmate-error.log
+
+# ─── Test coverage ────────────────────────────────────────────────────────────
+coverage/
+lcov.info
+
+# ─── Temporary files ──────────────────────────────────────────────────────────
+*.tmp
+*.bak
+
+# ─── SQLite database files ────────────────────────────────────────────────────
+# User data files should never be committed
+*.db
+*.sqlite
+*.sqlite3
+openmate.db-shm
+openmate.db-wal
+
+# ─── Screenshot / capture artifacts ──────────────────────────────────────────
+# In-memory only [DR-008]. If any debug capture file is ever created, block it.
+*.screenshot.png
+*.screenshot.jpg
+capture-debug/
+
+# ─── Audio artifacts ──────────────────────────────────────────────────────────
+# Audio buffers are in-memory only. Block any temporary playback/record files.
+*.wav
+*.aiff
+*.mp3
+*.m4a
+*.ogg
+openmate_tts_*
+

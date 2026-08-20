@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>OpenMate requires screen recording permission to understand what is on your screen when you ask questions about desktop context.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenMate uses your microphone for voice conversation.</string>
+</dict>
+</plist>

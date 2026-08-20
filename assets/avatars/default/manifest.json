@@ -1,0 +1,15 @@
+{
+  "id": "default",
+  "name": "Default Companion",
+  "version": "0.1.0",
+  "description": "Default placeholder avatar for OpenMate Phase 1.",
+  "states": ["idle", "talking", "thinking", "listening"],
+  "defaultState": "idle",
+  "assets": {
+    "idle": "idle.png",
+    "talking": "talking.png",
+    "thinking": "thinking.png",
+    "listening": "listening.png"
+  },
+  "note": "Phase 1-D: Sprite assets not yet included. Replace with 2D sprite sheets when ready. [ADR-003]"
+}
