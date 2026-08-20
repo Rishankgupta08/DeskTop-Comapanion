@@ -249,7 +249,9 @@ impl AppState {
             content: trimmed.to_string(),
         });
 
-        // 4. Build CompletionRequest via ModeEngine with custom identity
+        // 4. Check for and learn personal details/memories [Step 3]
+        self.extract_and_persist_personal_memories(trimmed).await;
+
         let companion_name = self
             .memory_engine
             .get_companion_name()
@@ -257,17 +259,39 @@ impl AppState {
             .unwrap_or_else(|_| "OpenMate".to_string());
         let user_name = self.memory_engine.get_user_name().await.unwrap_or_default();
 
+        // 5. Retrieve saved memories for context personalization [Step 3]
+        let memories = self.memory_engine.get_memories().await.unwrap_or_default();
+        let memory_context = if !memories.is_empty() {
+            let formatted_memories: Vec<String> = memories
+                .iter()
+                .take(10)
+                .map(|m| format!("- {}", m.content))
+                .collect();
+            let target_user = if user_name.trim().is_empty() {
+                "the user".to_string()
+            } else {
+                user_name.trim().to_string()
+            };
+            Some(format!(
+                "Here are things {} has shared with you recently:\n{}\nReference these naturally when relevant. Don't be creepy about it.",
+                target_user,
+                formatted_memories.join("\n")
+            ))
+        } else {
+            None
+        };
+
         let request = self
             .mode_engine
             .build_request(
                 messages,
-                None,
+                memory_context,
                 Some(&companion_name),
                 Some(&user_name),
             )
             .await;
 
-        // 5. Call AI Provider
+        // 6. Call AI Provider
         let response = self.ai_provider.generate_text(request).await?;
 
         // 6. Execute any embedded tools (read, list, search, open_app)
@@ -375,6 +399,65 @@ impl AppState {
         let res = self.ai_provider.generate_text(request).await?;
         let msg = res.content.trim().trim_matches('"').to_string();
         Ok(msg)
+    }
+
+    /// Automatically extract user name and personal facts from user input. [Step 3]
+    async fn extract_and_persist_personal_memories(&self, user_text: &str) {
+        let lower = user_text.to_lowercase();
+
+        // 1. Detect name introductions
+        if lower.starts_with("my name is ") {
+            let name = user_text[11..].trim().trim_matches('.').trim_matches('!').trim();
+            if !name.is_empty() && name.len() < 30 {
+                let _ = self.memory_engine.set_user_name(name).await;
+                info!("Learned user name: '{}'", name);
+            }
+        } else if lower.starts_with("call me ") {
+            let name = user_text[8..].trim().trim_matches('.').trim_matches('!').trim();
+            if !name.is_empty() && name.len() < 30 {
+                let _ = self.memory_engine.set_user_name(name).await;
+                info!("Learned user name: '{}'", name);
+            }
+        } else if lower.starts_with("i am ") {
+            let rest = lower[5..].trim();
+            if !rest.starts_with("busy")
+                && !rest.starts_with("tired")
+                && !rest.starts_with("happy")
+                && !rest.starts_with("sad")
+                && !rest.starts_with("working")
+                && !rest.starts_with("feeling")
+                && !rest.starts_with("trying")
+                && !rest.starts_with("going")
+            {
+                let name = user_text[5..].trim().trim_matches('.').trim_matches('!').trim();
+                if !name.is_empty() && name.len() < 25 && !name.contains(' ') {
+                    let _ = self.memory_engine.set_user_name(name).await;
+                    info!("Learned user name: '{}'", name);
+                }
+            }
+        }
+
+        // 2. Detect personal facts/events
+        let is_personal = lower.contains("exam")
+            || lower.contains("birthday")
+            || lower.contains("favorite")
+            || lower.contains("work as")
+            || lower.contains("live in")
+            || lower.contains("learning")
+            || lower.contains("bad day")
+            || lower.contains("good day")
+            || lower.contains("my dog")
+            || lower.contains("my cat")
+            || lower.contains("my friend");
+
+        if is_personal && user_text.len() < 200 {
+            let entry = crate::engine::memory::NewMemoryEntry {
+                content: user_text.trim().to_string(),
+                tags: vec!["personal".to_string()],
+            };
+            let _ = self.memory_engine.save_memory(entry).await;
+            info!("Saved personal memory: '{}'", user_text.trim());
+        }
     }
 }
 
@@ -622,5 +705,51 @@ mod tests {
                 e.user_message()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_automatic_user_name_learning_and_memory_extraction() {
+        let db = Connection::open_in_memory().await.unwrap();
+        crate::engine::memory::run_migrations(&db).await.unwrap();
+
+        let db_perm = db.clone();
+        let permission_engine = Arc::new(PermissionEngine::new(db_perm).await.unwrap());
+        let memory_engine = Arc::new(MemoryEngine::new(db));
+        let mode_engine = Arc::new(ModeEngine::new(CompanionMode::PersonalFriend));
+        let ai_provider: Arc<dyn AIProvider> = Arc::new(MockAiProvider {
+            succeed: true,
+            reply: "Nice to meet you Rishank! *purrs*".to_string(),
+            transcription: "".to_string(),
+        });
+        let voice_provider: Arc<dyn crate::ai::voice::VoiceProvider> = Arc::new(MockVoiceProvider {
+            succeed: true,
+            transcription: "".to_string(),
+        });
+        let context_engine = Arc::new(ContextEngine::new(
+            Arc::clone(&permission_engine),
+            Arc::clone(&ai_provider),
+        ));
+        let tool_engine = Arc::new(ToolEngine::new(Arc::clone(&permission_engine)));
+
+        let state = AppState::new(
+            permission_engine,
+            Arc::clone(&memory_engine),
+            mode_engine,
+            context_engine,
+            tool_engine,
+            ai_provider,
+            voice_provider,
+        );
+
+        // 1. Send "My name is Rishank"
+        let _ = state.send_message("My name is Rishank", None).await.unwrap();
+        let user_name = memory_engine.get_user_name().await.unwrap();
+        assert_eq!(user_name, "Rishank");
+
+        // 2. Send "I have an exam tomorrow"
+        let _ = state.send_message("I have an exam tomorrow", None).await.unwrap();
+        let memories = memory_engine.get_memories().await.unwrap();
+        assert!(!memories.is_empty());
+        assert!(memories.iter().any(|m| m.content.contains("exam tomorrow")));
     }
 }

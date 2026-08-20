@@ -59,6 +59,45 @@ interface FileConflict {
   errorMessage: string;
 }
 
+export function detectSentiment(response: string): AvatarState {
+  const lower = response.toLowerCase();
+  if (
+    lower.includes("sorry") ||
+    lower.includes("oh no") ||
+    (lower.includes("that") && lower.includes("hard")) ||
+    lower.includes("sad") ||
+    lower.includes("hurt") ||
+    lower.includes("heavy") ||
+    lower.includes("rough") ||
+    lower.includes("bad day")
+  ) {
+    return "concerned";
+  }
+  if (
+    lower.includes("!") &&
+    (lower.includes("great") ||
+      lower.includes("amazing") ||
+      lower.includes("yes") ||
+      lower.includes("yay") ||
+      lower.includes("purr") ||
+      lower.includes("love") ||
+      lower.includes("awesome") ||
+      lower.includes("happy"))
+  ) {
+    return "happy";
+  }
+  if (
+    lower.includes("*thinks*") ||
+    lower.includes("hmm") ||
+    lower.includes("let me") ||
+    lower.includes("wonder") ||
+    lower.includes("puzzl")
+  ) {
+    return "thinking";
+  }
+  return "talking";
+}
+
 function formatTimestamp(timestamp?: number): string {
   if (!timestamp) return "";
   const d = new Date(timestamp);
@@ -390,10 +429,11 @@ export default function ChatPanel({
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       parsePendingWrite(assistantMsgId, res.response);
 
-      setAvatarState("talking");
+      const emotion = detectSentiment(res.response);
+      setAvatarState(emotion);
       setTimeout(() => {
         setAvatarState("idle");
-      }, 4000);
+      }, 3500);
     } catch (err) {
       const errMsg =
         typeof err === "string" ? err : "Failed to record or transcribe voice input.";
@@ -425,7 +465,7 @@ export default function ChatPanel({
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
-    // Trigger thinking avatar state
+    // Trigger thinking avatar state while generating
     setAvatarState("thinking");
 
     try {
@@ -451,11 +491,12 @@ export default function ChatPanel({
       setMessages((prev) => [...prev, assistantMessage]);
       parsePendingWrite(msgId, response);
 
-      // Trigger talking avatar state for 2 seconds
-      setAvatarState("talking");
+      // Trigger avatar state matching response emotion [Step 2]
+      const emotion = detectSentiment(response);
+      setAvatarState(emotion);
       setTimeout(() => {
         setAvatarState("idle");
-      }, 2000);
+      }, 3500);
     } catch (err) {
       const errMsg =
         typeof err === "string" ? err : "Failed to receive a response from OpenMate.";

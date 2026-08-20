@@ -23,7 +23,7 @@ interface MessageBubbleProps {
 export default function MessageBubble({
   message,
   senderName,
-  durationMs = 6000,
+  durationMs = 7000,
   onClose,
   onClick,
   onHeightChange,

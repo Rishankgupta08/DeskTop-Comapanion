@@ -18,36 +18,37 @@ import {
   getPermissions,
   getProactiveMode,
   getCompanionName,
+  getUserName,
   generateAmbientMessage,
   startVoiceInput,
 } from "./hooks/useIpc";
-import type { AvatarState, CompanionMode, ChatMessage } from "./types";
+import type { AvatarState, CompanionMode, ChatMessage, ProactiveMode } from "./types";
 
 import Onboarding from "./components/onboarding/Onboarding";
 import Avatar from "./components/avatar/Avatar";
 import MessageBubble from "./components/avatar/MessageBubble";
-import ChatPanel from "./components/chat/ChatPanel";
+import ChatPanel, { detectSentiment } from "./components/chat/ChatPanel";
 import Settings from "./components/settings/Settings";
 import { initializeWindowLayout, setWindowLayoutState } from "./utils/windowLayout";
 
-// Ambient messages pools by time of day [Feature 2.2]
-const MORNING_POOL = [
-  "Good morning! Ready to conquer the day? *stretches*",
-  "Psst... I made you an imaginary coffee ☕",
-  "Morning! What are we working on today?",
-];
-
-const AFTERNOON_POOL = [
-  "How's it going? Need a break? *yawns*",
-  "You've been working hard. I noticed. 👀",
-  "Anything I can help with?",
-];
-
-const EVENING_POOL = [
-  "Still here! Don't forget to rest.",
-  "What did you get done today? Tell me everything.",
-  "I'm bored. Talk to me? *paws at screen*",
-];
+// Ambient messages pools by time of day [Feature 2.2, Step 2]
+const AMBIENT_MESSAGES = {
+  morning: [
+    "*stretches and yawns* Good morning! Ready?",
+    "Psst. I made you an imaginary coffee.",
+    "Morning! What are we doing today?",
+  ],
+  afternoon: [
+    "How's it going? Need anything?",
+    "You've been working hard. I see you. 👀",
+    "*bats at your cursor* Pay attention to me!",
+  ],
+  evening: [
+    "Still here! Don't forget to rest.",
+    "What did you get done today?",
+    "*paws at screen* Talk to me?",
+  ],
+};
 
 export default function App() {
   // App initialization & API Key gate — checked once on mount only
@@ -61,25 +62,33 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isMicAllowed, setIsMicAllowed] = useState(false);
 
-  // Ambient Message Bubble state [Feature 2.1]
+  // Ambient Message Bubble state [Feature 2.1, Step 4]
   const [bubbleMessage, setBubbleMessage] = useState<string | null>(null);
   const [bubbleSender, setBubbleSender] = useState<string>("OpenMate");
   const [companionName, setCompanionName] = useState<string>("OpenMate");
+  const [userName, setUserName] = useState<string>("");
+  const [proactiveMode, setProactiveMode] = useState<ProactiveMode>("subtle");
   const [bubbleCardHeight, setBubbleCardHeight] = useState<number>(70);
 
   // Track chat activity for idle detection [Feature 2.2]
   const lastChatTimeRef = useRef<number>(Date.now());
-  const shownAmbientRef = useRef<Set<string>>(new Set());
+  const ambientTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check permissions & configuration
+  // Check permissions & configuration [Step 4]
   const refreshStatus = useCallback(async () => {
     try {
       const perms = await getPermissions();
       const mic = perms.find((p) => p.capability === "microphone");
       setIsMicAllowed(mic?.state === "allow");
 
-      const name = await getCompanionName();
-      setCompanionName(name || "OpenMate");
+      const compName = await getCompanionName().catch(() => "OpenMate");
+      if (compName) setCompanionName(compName);
+
+      const uName = await getUserName().catch(() => "");
+      if (uName) setUserName(uName);
+
+      const pMode = await getProactiveMode().catch(() => "subtle" as ProactiveMode);
+      if (pMode) setProactiveMode(pMode as ProactiveMode);
     } catch {
       // Non-blocking status check error handling
     }
@@ -142,28 +151,17 @@ export default function App() {
   const handleTriggerVoice = useCallback(async () => {
     try {
       setAvatarState("listening");
-      const compName = await getCompanionName().catch(() => "OpenMate");
+      const compName = await getCompanionName().catch(() => companionName);
       setBubbleSender(compName);
       setBubbleMessage("Listening... 🎙️");
 
       const res = await startVoiceInput();
-      setAvatarState("happy");
       lastChatTimeRef.current = Date.now();
-
-      // Show user transcription
-      setBubbleSender("You");
-      setBubbleMessage(`"${res.transcription}"`);
-
-      // After 2 seconds, show companion response
-      setTimeout(() => {
+      if (res.response) {
         setBubbleSender(compName);
-        if (res.response.length <= 100) {
-          setBubbleMessage(res.response);
-        } else {
-          setBubbleMessage(res.response.slice(0, 95) + "...");
-          setIsChatOpen(true);
-        }
-
+        setBubbleMessage(res.response);
+        const emotion = detectSentiment(res.response);
+        setAvatarState(emotion);
         setMessages((prev) => [
           ...prev,
           {
@@ -179,14 +177,15 @@ export default function App() {
             timestamp: Date.now(),
           },
         ]);
-
-        setTimeout(() => setAvatarState("idle"), 4000);
-      }, 2000);
-    } catch (err) {
+      } else {
+        setAvatarState("happy");
+      }
+      setTimeout(() => setAvatarState("idle"), 4000);
+    } catch (e: unknown) {
       setAvatarState("concerned");
-      setBubbleSender(companionName);
-      setBubbleMessage(`Voice input: ${String(err)}`);
-      setTimeout(() => setAvatarState("idle"), 3500);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setBubbleMessage(errMsg);
+      setTimeout(() => setAvatarState("idle"), 5000);
     }
   }, [companionName]);
 
@@ -211,7 +210,8 @@ export default function App() {
         if (msg && msg.trim()) {
           setBubbleSender(companionName);
           setBubbleMessage(msg.trim());
-          setAvatarState("happy");
+          const emotion = detectSentiment(msg);
+          setAvatarState(emotion);
           setTimeout(() => setAvatarState("idle"), 4500);
         }
       }
@@ -226,65 +226,68 @@ export default function App() {
     };
   }, [handleTriggerVoice, companionName]);
 
-  // ── Ambient Message Scheduler [Feature 2.2, Feature 2.3] ────────────────────
+  // ── Ambient Message Scheduler [Step 2 & Step 3] ────────────────────────────
   useEffect(() => {
     if (!apiKeyConfigured) return;
 
-    // Check every 60 seconds whether it's time to trigger an ambient bubble
-    const interval = setInterval(async () => {
-      const now = Date.now();
-      const idleMinutes = (now - lastChatTimeRef.current) / (1000 * 60);
+    const scheduleNextAmbient = () => {
+      // Random 8-15 minute interval
+      const delay = (8 + Math.random() * 7) * 60 * 1000;
 
-      // Rule: only show if user has been idle from chat for at least 5 minutes
-      if (idleMinutes < 5) return;
+      return setTimeout(async () => {
+        const now = Date.now();
+        const timeSinceChat = now - lastChatTimeRef.current;
 
-      try {
-        const pMode = await getProactiveMode();
-        if (pMode === "off") return;
+        // Only show if:
+        // 1. Proactive mode is not Off
+        // 2. User hasn't chatted in last 5 minutes
+        // 3. Chat panel is closed
+        try {
+          const pMode = await getProactiveMode().catch(() => proactiveMode);
+          if (!isChatOpen && timeSinceChat > 5 * 60 * 1000 && pMode !== "off") {
+            let chosenMessage = "";
 
-        const currentHour = new Date().getHours();
-        let pool = EVENING_POOL;
-        if (currentHour >= 6 && currentHour < 12) {
-          pool = MORNING_POOL;
-        } else if (currentHour >= 12 && currentHour < 18) {
-          pool = AFTERNOON_POOL;
-        }
-
-        let chosenMessage = "";
-
-        // If proactive mode is Active, try Gemini generation first [Feature 2.3]
-        if (pMode === "active") {
-          try {
-            const aiMsg = await generateAmbientMessage();
-            if (aiMsg && aiMsg.length > 3) {
-              chosenMessage = aiMsg;
+            // Step 3: When proactive mode is Active, call Gemini
+            if (pMode === "active") {
+              try {
+                const aiMsg = await generateAmbientMessage();
+                if (aiMsg && aiMsg.length < 100 && !aiMsg.toLowerCase().startsWith("skip")) {
+                  chosenMessage = aiMsg.trim();
+                }
+              } catch {
+                // Fallback to canned pool
+              }
             }
-          } catch {
-            // fallback to canned pool
+
+            if (!chosenMessage) {
+              const hour = new Date().getHours();
+              const poolKey = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+              const pool = AMBIENT_MESSAGES[poolKey];
+              chosenMessage = pool[Math.floor(Math.random() * pool.length)];
+            }
+
+            if (chosenMessage) {
+              const compName = await getCompanionName().catch(() => companionName);
+              setBubbleSender(compName || companionName);
+              setBubbleMessage(chosenMessage);
+              setAvatarState("happy");
+              setTimeout(() => setAvatarState("idle"), 3000);
+            }
           }
+        } catch {
+          // Scheduler non-blocking error handling
         }
 
-        if (!chosenMessage) {
-          const available = pool.filter((msg) => !shownAmbientRef.current.has(msg));
-          const list = available.length > 0 ? available : pool;
-          chosenMessage = list[Math.floor(Math.random() * list.length)];
-          shownAmbientRef.current.add(chosenMessage);
-        }
+        // Schedule next
+        ambientTimer.current = scheduleNextAmbient();
+      }, delay);
+    };
 
-        if (chosenMessage) {
-          const compName = await getCompanionName().catch(() => "OpenMate");
-          setBubbleSender(compName);
-          setBubbleMessage(chosenMessage);
-          setAvatarState("happy");
-          setTimeout(() => setAvatarState("idle"), 4000);
-        }
-      } catch {
-        // Scheduler non-blocking error handling
-      }
-    }, 90000); // Check every 90 seconds (idle >= 5 min guard applies)
-
-    return () => clearInterval(interval);
-  }, [apiKeyConfigured]);
+    ambientTimer.current = scheduleNextAmbient();
+    return () => {
+      if (ambientTimer.current) clearTimeout(ambientTimer.current);
+    };
+  }, [apiKeyConfigured, isChatOpen, proactiveMode, companionName, userName]);
 
   // Loading state while checking OS keychain on startup
   if (apiKeyConfigured === null) {
