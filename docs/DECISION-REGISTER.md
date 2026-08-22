@@ -30,6 +30,14 @@ This register documents all architectural, security, and design decisions for Op
 | **DR-032** | Avatar Presentation | Draggable 2D desktop overlay with dynamic animated expressions | CONFIRMED | Floating breathing animation and drag-and-drop |
 | **DR-033** | Chat UI | Slide-in bottom-right panel with auto-scroll and mode switcher | CONFIRMED | Markdown, timestamps, copy button |
 | **DR-035** | Screenshot Capture Library | `xcap` crate for cross-platform in-memory screen capture | CONFIRMED | In-memory frame capture |
+| **DR-036** | Avatar package format | PNG spritesheets + JSON manifest | CONFIRMED | Folder structure: `avatars/<name>/manifest.json` + `idle.png` + `thinking.png` + `talking.png` + `happy.png` + `concerned.png` + `listening.png` |
+| **DR-037** | Plugin scope | Option C — Avatars + TypeScript modes + signed Rust tool plugins | CONFIRMED | Signing/trust model to be designed in Phase 3-C before any third-party execution is allowed |
+| **DR-039** | Plugin sandboxing | Out-of-process execution via JSON-RPC 2.0 over stdin/stdout pipes. macOS: sandbox-exec. Windows: Job Objects. No shared address space with host. [OD-01 confirmed] | CONFIRMED | Documented in `docs/plugin-trust-model.md` |
+| **DR-040** | Plugin cryptography | Ed25519 signatures via ed25519-dalek crate. Author signs plugin.toml + binary. OpenMate verifies at load time. [OD-02 confirmed] | CONFIRMED | Documented in `docs/plugin-trust-model.md` |
+| **DR-041** | Trust registry | Bundled trusted_authors.json + optional online sync with offline fallback. Users can manually approve author keys. [OD-03 confirmed] | CONFIRMED | Documented in `docs/plugin-trust-model.md` |
+| **DR-042** | Plugin author tooling | openmate-cli subcommand: openmate-cli plugin sign, openmate-cli plugin verify, openmate-cli plugin package [OD-04 confirmed] | CONFIRMED | Documented in `docs/plugin-trust-model.md` |
+| **DR-043** | Unsigned plugins | Blocked by default. Developer Mode opt-in in Settings shows persistent warning banner. Every tool call requires explicit interactive confirmation in Developer Mode. [OD-05 confirmed] | CONFIRMED | Documented in `docs/plugin-trust-model.md` |
+| **DR-044** | Plugin binary format | Multi-architecture binaries in bin/ folder: plugin-darwin-arm64, plugin-darwin-x86_64, plugin-windows-x86_64.exe [OD-06 confirmed] | CONFIRMED | Documented in `docs/plugin-trust-model.md` |
 
 ---
 
@@ -39,3 +47,4 @@ This register documents all architectural, security, and design decisions for Op
 |---|---|---|---|
 | **DR-009** | Screenshot Compression Tuning | TBD | Defaulting to JPEG quality 85 |
 | **DR-019** | Adaptive History Token Window | TBD | Defaulting to 20 conversation turns |
+| **DR-038** | CI/CD setup | TBD | Deferred — not part of Phase 3 scope |

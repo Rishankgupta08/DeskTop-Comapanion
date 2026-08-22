@@ -456,6 +456,34 @@ impl MemoryEngine {
     pub async fn set_user_name(&self, name: &str) -> Result<(), OpenMateError> {
         self.set_config("user_name", name.trim()).await
     }
+
+    /// Retrieve the currently active avatar package name. Defaults to "default".
+    pub async fn get_active_avatar(&self) -> Result<String, OpenMateError> {
+        self.get_config("active_avatar", "default").await
+    }
+
+    /// Set the currently active avatar package name.
+    pub async fn set_active_avatar(&self, name: &str) -> Result<(), OpenMateError> {
+        let trimmed = name.trim();
+        let val = if trimmed.is_empty() { "default" } else { trimmed };
+        self.set_config("active_avatar", val).await
+    }
+
+    /// Retrieve whether Developer Mode is enabled. Defaults to false.
+    pub async fn get_developer_mode(&self) -> Result<bool, OpenMateError> {
+        let val = self.get_config("developer_mode", "false").await?;
+        Ok(val.trim().eq_ignore_ascii_case("true"))
+    }
+
+    /// Enable or disable Developer Mode.
+    pub async fn set_developer_mode(&self, enabled: bool) -> Result<(), OpenMateError> {
+        self.set_config("developer_mode", if enabled { "true" } else { "false" }).await
+    }
+
+    /// Access the underlying SQLite connection handle.
+    pub fn db(&self) -> &Connection {
+        &self.db
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -579,5 +607,22 @@ mod tests {
         engine.set_companion_name("   ").await.unwrap();
         assert_eq!(engine.get_companion_name().await.unwrap(), "OpenMate");
     }
+
+    #[tokio::test]
+    async fn test_active_avatar_persistence() {
+        let engine = test_engine().await;
+
+        // Default active avatar
+        assert_eq!(engine.get_active_avatar().await.unwrap(), "default");
+
+        // Set custom active avatar
+        engine.set_active_avatar("cyber-cat").await.unwrap();
+        assert_eq!(engine.get_active_avatar().await.unwrap(), "cyber-cat");
+
+        // Empty string reverts to default
+        engine.set_active_avatar("   ").await.unwrap();
+        assert_eq!(engine.get_active_avatar().await.unwrap(), "default");
+    }
 }
+
 

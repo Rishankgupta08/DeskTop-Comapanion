@@ -8,8 +8,10 @@
 use crate::{
     ai::provider::{AIProvider, ChatMessage, MessageRole},
     engine::{
-        context::ContextEngine, memory::MemoryEngine, mode::{CompanionMode, ModeEngine},
-        permission::{Capability, PermissionEngine}, tool::{Tool, ToolEngine},
+        avatar::AvatarLoader, context::ContextEngine, memory::MemoryEngine,
+        mode::{CompanionMode, ModeEngine}, permission::{Capability, PermissionEngine},
+        plugin::{PluginLoader, TrustRegistry},
+        tool::{Tool, ToolEngine},
     },
     error::OpenMateError,
 };
@@ -36,6 +38,9 @@ pub struct AppState {
     pub mode_engine: Arc<ModeEngine>,
     pub context_engine: Arc<ContextEngine>,
     pub tool_engine: Arc<ToolEngine>,
+    pub avatar_loader: Arc<AvatarLoader>,
+    pub plugin_loader: Arc<PluginLoader>,
+    pub plugin_trust: Arc<RwLock<TrustRegistry>>,
     pub ai_provider: Arc<dyn AIProvider>,
     pub voice_provider: Arc<dyn crate::ai::voice::VoiceProvider>,
     pub app_handle: Option<tauri::AppHandle>,
@@ -50,6 +55,9 @@ impl AppState {
         mode_engine: Arc<ModeEngine>,
         context_engine: Arc<ContextEngine>,
         tool_engine: Arc<ToolEngine>,
+        avatar_loader: Arc<AvatarLoader>,
+        plugin_loader: Arc<PluginLoader>,
+        plugin_trust: Arc<RwLock<TrustRegistry>>,
         ai_provider: Arc<dyn AIProvider>,
         voice_provider: Arc<dyn crate::ai::voice::VoiceProvider>,
     ) -> Self {
@@ -59,6 +67,9 @@ impl AppState {
             mode_engine,
             context_engine,
             tool_engine,
+            avatar_loader,
+            plugin_loader,
+            plugin_trust,
             ai_provider,
             voice_provider,
             app_handle: None,
@@ -353,11 +364,14 @@ impl AppState {
 
         let response = self.send_message(&transcription, None).await?;
 
-        if let Ok(speech_output) = self.voice_provider.synthesize(&response).await {
-            let handle_clone = self.app_handle.clone();
-            tokio::spawn(async move {
-                let _ = crate::platform::audio::play_audio(speech_output, handle_clone).await;
-            });
+        let tts_text = prepare_for_tts(&response);
+        if !tts_text.is_empty() {
+            if let Ok(speech_output) = self.voice_provider.synthesize(&tts_text).await {
+                let handle_clone = self.app_handle.clone();
+                tokio::spawn(async move {
+                    let _ = crate::platform::audio::play_audio(speech_output, handle_clone).await;
+                });
+            }
         }
 
         Ok(VoiceResult {
@@ -461,6 +475,91 @@ impl AppState {
     }
 }
 
+// ── Text Cleaning & TTS Preparation [Fix TTS Quality] ─────────────────────────
+
+/// Clean response text before sending to TTS. [Fix Problem 1]
+///
+/// Rules:
+/// - Strips tool invocation tags: `[OPEN_APP: Safari]`, `[READ_FILE: /path]`, etc.
+/// - Strips tool execution feedback: `*(Opened Safari)*`, `*(Failed to...)*`, etc.
+/// - Strips asterisk action text: `*purrs*`, `*adjusts glasses*`, etc.
+/// - Replaces markdown bold `**text**` -> `text`
+/// - Replaces markdown inline code `` `code` `` -> `code`
+/// - Replaces markdown code blocks ```...``` -> `"I have some code for you — check the chat."`
+/// - Filters out emojis (unicode ranges 0x1F300..=0x1FAFF, 0x2600..=0x27BF, 0xFE00..=0xFE0F)
+/// - Cleans up consecutive whitespace/newlines
+pub fn clean_for_tts(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // 1. Remove tool tags entirely: [OPEN_APP: x], [READ_FILE: x], etc.
+    let tool_tag = regex::Regex::new(r"\[[A-Z_]+:[^\]]*\]").unwrap();
+    result = tool_tag.replace_all(&result, "").to_string();
+
+    // 2. Remove tool result lines: *(Opened Safari)* or *(Failed to...)*
+    let tool_result = regex::Regex::new(r"\*\([^)]*\)\*").unwrap();
+    result = tool_result.replace_all(&result, "").to_string();
+
+    // 3. Remove code blocks entirely before single asterisk matching
+    let code_block = regex::Regex::new(r"```[\s\S]*?```").unwrap();
+    result = code_block
+        .replace_all(&result, "I have some code for you — check the chat.")
+        .to_string();
+
+    // 4. Remove markdown bold: **text** → text
+    let bold = regex::Regex::new(r"\*\*([^*]+)\*\*").unwrap();
+    result = bold.replace_all(&result, "$1").to_string();
+
+    // 5. Remove *action text* (cat actions like *purrs* *adjusts glasses*)
+    let action = regex::Regex::new(r"\*[^*]+\*").unwrap();
+    result = action.replace_all(&result, "").to_string();
+
+    // 6. Remove markdown inline code: `code` → code
+    let code = regex::Regex::new(r"`([^`]+)`").unwrap();
+    result = code.replace_all(&result, "$1").to_string();
+
+    // 7. Replace emojis with nothing (remove entirely via unicode range filter)
+    result = result
+        .chars()
+        .filter(|c| {
+            let n = *c as u32;
+            !(n >= 0x1F300 && n <= 0x1FAFF)
+                && !(n >= 0x2600 && n <= 0x27BF)
+                && !(n >= 0xFE00 && n <= 0xFE0F)
+        })
+        .collect();
+
+    // 8. Clean up extra whitespace from removals
+    let whitespace = regex::Regex::new(r"\n{3,}").unwrap();
+    result = whitespace.replace_all(&result, "\n\n").to_string();
+
+    let spaces = regex::Regex::new(r"  +").unwrap();
+    result = spaces.replace_all(&result, " ").to_string();
+
+    result.trim().to_string()
+}
+
+/// Truncate very long responses for voice output. [Fix Problem 3]
+pub fn prepare_for_tts(text: &str) -> String {
+    let cleaned = clean_for_tts(text);
+
+    // If response is very long, speak only the first meaningful part
+    // Split on sentence boundaries
+    let sentences: Vec<&str> = cleaned
+        .split(|c| c == '.' || c == '!' || c == '?')
+        .map(|s| s.trim())
+        .filter(|s| s.len() > 5)
+        .collect();
+
+    if sentences.len() <= 3 {
+        // Short response — speak all of it
+        return cleaned;
+    }
+
+    // Long response — speak first 2 sentences + hint
+    let first_two = sentences[..2].join(". ");
+    format!("{}. Check the chat for the full response.", first_two)
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -561,6 +660,12 @@ mod tests {
             Arc::clone(&ai_provider),
         ));
         let tool_engine = Arc::new(ToolEngine::new(Arc::clone(&permission_engine)));
+        let avatar_loader = Arc::new(AvatarLoader::new(std::env::temp_dir().join("test_avatars")));
+        let trust = Arc::new(RwLock::new(TrustRegistry::load_bundled().unwrap()));
+        let plugin_loader = Arc::new(PluginLoader::new(
+            std::env::temp_dir().join("test_plugins"),
+            Arc::clone(&trust),
+        ));
 
         AppState::new(
             permission_engine,
@@ -568,6 +673,9 @@ mod tests {
             mode_engine,
             context_engine,
             tool_engine,
+            avatar_loader,
+            plugin_loader,
+            trust,
             ai_provider,
             voice_provider,
         )
@@ -685,6 +793,12 @@ mod tests {
             Arc::clone(&ai_provider),
         ));
         let tool_engine = Arc::new(ToolEngine::new(Arc::clone(&permission_engine)));
+        let avatar_loader = Arc::new(AvatarLoader::new(std::env::temp_dir().join("test_avatars_empty_voice")));
+        let trust = Arc::new(RwLock::new(TrustRegistry::load_bundled().unwrap()));
+        let plugin_loader = Arc::new(PluginLoader::new(
+            std::env::temp_dir().join("test_plugins_voice"),
+            Arc::clone(&trust),
+        ));
 
         let state = AppState::new(
             permission_engine,
@@ -692,6 +806,9 @@ mod tests {
             mode_engine,
             context_engine,
             tool_engine,
+            avatar_loader,
+            plugin_loader,
+            trust,
             ai_provider,
             voice_provider,
         );
@@ -730,6 +847,12 @@ mod tests {
             Arc::clone(&ai_provider),
         ));
         let tool_engine = Arc::new(ToolEngine::new(Arc::clone(&permission_engine)));
+        let avatar_loader = Arc::new(AvatarLoader::new(std::env::temp_dir().join("test_avatars_learning")));
+        let trust = Arc::new(RwLock::new(TrustRegistry::load_bundled().unwrap()));
+        let plugin_loader = Arc::new(PluginLoader::new(
+            std::env::temp_dir().join("test_plugins_learn"),
+            Arc::clone(&trust),
+        ));
 
         let state = AppState::new(
             permission_engine,
@@ -737,6 +860,9 @@ mod tests {
             mode_engine,
             context_engine,
             tool_engine,
+            avatar_loader,
+            plugin_loader,
+            trust,
             ai_provider,
             voice_provider,
         );
@@ -751,5 +877,44 @@ mod tests {
         let memories = memory_engine.get_memories().await.unwrap();
         assert!(!memories.is_empty());
         assert!(memories.iter().any(|m| m.content.contains("exam tomorrow")));
+    }
+
+    #[test]
+    fn test_clean_for_tts_removes_tool_tags_and_results() {
+        let input = "Opening Safari for you! [OPEN_APP: Safari]\n\n*(Opened Safari)*";
+        let cleaned = clean_for_tts(input);
+        assert_eq!(cleaned, "Opening Safari for you!");
+    }
+
+    #[test]
+    fn test_clean_for_tts_removes_actions_bold_code_and_emojis() {
+        let input = "*purrs softly* Here is the **important** `function_name` result! 🐱✨";
+        let cleaned = clean_for_tts(input);
+        assert_eq!(cleaned, "Here is the important function_name result!");
+    }
+
+    #[test]
+    fn test_clean_for_tts_replaces_code_blocks() {
+        let input = "Here is the code:\n```rust\nfn main() {}\n```\nLet me know if this works!";
+        let cleaned = clean_for_tts(input);
+        assert!(cleaned.contains("I have some code for you — check the chat."));
+        assert!(!cleaned.contains("fn main()"));
+    }
+
+    #[test]
+    fn test_prepare_for_tts_short_response() {
+        let input = "Sure thing! I can help you with that. Let's get started.";
+        let prepared = prepare_for_tts(input);
+        assert_eq!(prepared, "Sure thing! I can help you with that. Let's get started.");
+    }
+
+    #[test]
+    fn test_prepare_for_tts_long_response_truncation() {
+        let input = "First sentence is here. Second sentence is right here. Third sentence goes on. Fourth sentence completes the answer.";
+        let prepared = prepare_for_tts(input);
+        assert_eq!(
+            prepared,
+            "First sentence is here. Second sentence is right here. Check the chat for the full response."
+        );
     }
 }

@@ -80,5 +80,16 @@ zeroize = "1.8"
 # ── Clipboard monitoring [DR-007] ───────────────────────────────────────────
 arboard = "3.4"
 
+# ── Plugin Cryptography & Manifests [DR-039, DR-040] ────────────────────────
+ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
+sha2 = "0.10"
+hex = "0.4"
+toml = "0.8"
+rand = "0.8"
+regex = "1"
+
+
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+

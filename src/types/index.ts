@@ -24,14 +24,17 @@ export interface PermissionStatus {
 
 // ── Companion modes ───────────────────────────────────────────────────────────
 
-export type CompanionMode = "play" | "coder" | "assistant" | "personal_friend";
+export type BuiltinCompanionMode = "play" | "coder" | "assistant" | "personal_friend";
+export type CompanionMode = BuiltinCompanionMode | (string & {});
 
-export const MODE_LABELS: Record<CompanionMode, string> = {
+export const MODE_LABELS: Record<BuiltinCompanionMode, string> = {
   play: "Play",
   coder: "Coder",
   assistant: "Assistant",
   personal_friend: "Personal Friend",
 };
+
+export * from "./mode-extension";
 
 // ── Memory types ──────────────────────────────────────────────────────────────
 
@@ -96,7 +99,7 @@ export interface AppSettings {
   mode: CompanionMode;
 }
 
-// ── Avatar types (ADR-003) ────────────────────────────────────────────────────
+// ── Avatar types (ADR-003, DR-036) ────────────────────────────────────────────
 
 export type AvatarState =
   | "idle"
@@ -107,12 +110,22 @@ export type AvatarState =
   | "concerned";
 
 export interface AvatarManifest {
-  id: string;
   name: string;
   version: string;
+  author: string;
+  description: string;
+  type: string;
   states: AvatarState[];
-  defaultState: AvatarState;
+  openmate_version: string;
 }
+
+export interface AvatarInfo {
+  name: string;
+  author: string;
+  description: string;
+  is_active: boolean;
+}
+
 
 // ── Context types (Phase 1-E) ─────────────────────────────────────────────────
 
@@ -140,3 +153,29 @@ export interface VoiceResult {
 // ── Proactive types (Phase 2-C) ──────────────────────────────────────────────
 
 export type ProactiveMode = "off" | "subtle" | "active";
+
+// ── Plugin types (Phase 3-D) [DR-039 through DR-044] ──────────────────────────
+
+export type PluginTrustLevel =
+  | "builtin"
+  | "community"
+  | "user_approved"
+  | "unknown"
+  | "revoked";
+
+export interface PluginToolInfo {
+  name: string;
+  description: string;
+}
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  author: string;
+  author_pubkey: string;
+  description: string;
+  trust_level: PluginTrustLevel;
+  required_capabilities: string[];
+  tools: PluginToolInfo[];
+}

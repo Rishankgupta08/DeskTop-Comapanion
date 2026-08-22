@@ -26,6 +26,7 @@ use crate::{
     error::OpenMateError,
     platform::keychain,
 };
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::AppStateContainer;
@@ -527,3 +528,297 @@ pub async fn start_window_drag(window: tauri::Window) -> Result<(), String> {
         .start_dragging()
         .map_err(|e| format!("Failed to start dragging: {}", e))
 }
+
+// ── Avatar package commands (Phase 3-A) ──────────────────────────────────────
+
+/// Retrieve the currently active avatar package name. [DR-036]
+#[tauri::command]
+pub async fn get_active_avatar(
+    app_state: State<'_, AppStateContainer>,
+) -> Result<String, String> {
+    let app = app_state.0.read().await;
+    app.memory_engine
+        .get_active_avatar()
+        .await
+        .map_err(|e| e.user_message().to_string())
+}
+
+/// Set the currently active avatar package name. [DR-036]
+/// Validates that the requested avatar package is either "default" or an existing valid package.
+#[tauri::command]
+pub async fn set_active_avatar(
+    app_state: State<'_, AppStateContainer>,
+    name: String,
+) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "default" || trimmed == "builtin" {
+        let app = app_state.0.read().await;
+        app.memory_engine
+            .set_active_avatar("default")
+            .await
+            .map_err(|e| e.user_message().to_string())?;
+        return Ok(());
+    }
+
+    if !crate::engine::avatar::AvatarLoader::is_valid_name(trimmed) {
+        return Err(format!("Invalid avatar package name '{}'", trimmed));
+    }
+
+    let app = app_state.0.read().await;
+    // Verify that the avatar package actually exists and is valid
+    app.avatar_loader
+        .load_package(trimmed)
+        .map_err(|e| format!("Cannot activate avatar '{}': {}", trimmed, e))?;
+
+    app.memory_engine
+        .set_active_avatar(trimmed)
+        .await
+        .map_err(|e| e.user_message().to_string())?;
+
+    Ok(())
+}
+
+/// List all available avatars: "Built-in Cat" (always first) + all discovered valid community packages.
+#[tauri::command]
+pub async fn list_avatars(
+    app_state: State<'_, AppStateContainer>,
+) -> Result<Vec<crate::engine::avatar::AvatarInfo>, String> {
+    let app = app_state.0.read().await;
+    let active_name = app
+        .memory_engine
+        .get_active_avatar()
+        .await
+        .unwrap_or_else(|_| "default".to_string());
+
+    let mut list = Vec::new();
+
+    // 1. Built-in Cat is always first option
+    list.push(crate::engine::avatar::AvatarInfo {
+        name: "default".to_string(),
+        author: "OpenMate".to_string(),
+        description: "Built-in OpenMate cat companion".to_string(),
+        is_active: active_name == "default",
+    });
+
+    // 2. Scan external packages
+    let packages = app.avatar_loader.scan_packages();
+    for pkg in packages {
+        if pkg.manifest.name != "default" {
+            let is_active = active_name == pkg.manifest.name;
+            list.push(crate::engine::avatar::AvatarInfo {
+                name: pkg.manifest.name,
+                author: pkg.manifest.author,
+                description: pkg.manifest.description,
+                is_active,
+            });
+        }
+    }
+
+    Ok(list)
+}
+
+/// Serve avatar state image as base64-encoded PNG data. [DR-036]
+/// Security:
+/// - avatar_name must match [a-zA-Z0-9-]+ only
+/// - state must be one of the 6 valid states
+/// - path is constructed safely from avatars_dir + avatar_name + state.png
+/// - path traversal is strictly rejected
+#[tauri::command]
+pub async fn get_avatar_image(
+    app_state: State<'_, AppStateContainer>,
+    avatar_name: String,
+    state: String,
+) -> Result<String, String> {
+    let name_trimmed = avatar_name.trim();
+    let state_trimmed = state.trim();
+
+    if !crate::engine::avatar::AvatarLoader::is_valid_name(name_trimmed) {
+        return Err(format!("Invalid avatar name '{}'", name_trimmed));
+    }
+
+    crate::engine::avatar::AvatarLoader::validate_state(state_trimmed)
+        .map_err(|e| e.to_string())?;
+
+    let app = app_state.0.read().await;
+    let pkg = app
+        .avatar_loader
+        .load_package(name_trimmed)
+        .map_err(|e| format!("Failed to load avatar package: {}", e))?;
+
+    let image_filename = format!("{}.png", state_trimmed);
+    let image_path = pkg.path.join(image_filename);
+
+    if !image_path.exists() {
+        return Err(format!("Avatar state image '{}.png' not found", state_trimmed));
+    }
+
+    let bytes = tokio::fs::read(&image_path)
+        .await
+        .map_err(|e| format!("Failed to read avatar image: {}", e))?;
+
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(encoded)
+}
+
+// ── Plugin Engine IPC Commands [Phase 3-D, DR-039 through DR-044] ─────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub author_pubkey: String,
+    pub description: String,
+    pub trust_level: String, // "builtin", "community", "user_approved", "unknown", "revoked"
+    pub required_capabilities: Vec<String>,
+    pub tools: Vec<PluginToolInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PluginToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// Retrieve whether Developer Mode is enabled. [DR-043]
+#[tauri::command]
+pub async fn get_developer_mode(
+    app_state: State<'_, AppStateContainer>,
+) -> Result<bool, String> {
+    let app = app_state.0.read().await;
+    app.memory_engine
+        .get_developer_mode()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Enable or disable Developer Mode. [DR-043]
+#[tauri::command]
+pub async fn set_developer_mode(
+    app_state: State<'_, AppStateContainer>,
+    enabled: bool,
+) -> Result<(), String> {
+    let app = app_state.0.read().await;
+    app.memory_engine
+        .set_developer_mode(enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List all discovered plugins with metadata and trust levels. [DR-039, DR-041]
+#[tauri::command]
+pub async fn list_plugins(
+    app_state: State<'_, AppStateContainer>,
+) -> Result<Vec<PluginInfo>, String> {
+    let app = app_state.0.read().await;
+    let dev_mode = app.memory_engine.get_developer_mode().await.unwrap_or(false);
+
+    let loaded_results = app.plugin_loader.scan_all(dev_mode).await;
+    let mut list = Vec::new();
+
+    for res in loaded_results {
+        if let Ok(loaded) = res {
+            let trust_str = match loaded.trust_level {
+                crate::engine::plugin::TrustLevel::Builtin => "builtin",
+                crate::engine::plugin::TrustLevel::Community => "community",
+                crate::engine::plugin::TrustLevel::UserApproved => "user_approved",
+                crate::engine::plugin::TrustLevel::Unknown => "unknown",
+                crate::engine::plugin::TrustLevel::Revoked => "revoked",
+            };
+
+            let tools = loaded
+                .manifest
+                .tools
+                .into_iter()
+                .map(|t| PluginToolInfo {
+                    name: t.name,
+                    description: t.description,
+                })
+                .collect();
+
+            list.push(PluginInfo {
+                id: loaded.manifest.plugin.id,
+                name: loaded.manifest.plugin.name,
+                version: loaded.manifest.plugin.version,
+                author: loaded.manifest.plugin.author,
+                author_pubkey: loaded.manifest.plugin.author_pubkey,
+                description: loaded.manifest.plugin.description,
+                trust_level: trust_str.to_string(),
+                required_capabilities: loaded.manifest.capabilities.required,
+                tools,
+            });
+        }
+    }
+
+    Ok(list)
+}
+
+/// Approve an author's public key in Developer Mode. [DR-041, DR-043]
+#[tauri::command]
+pub async fn approve_plugin_key(
+    app_state: State<'_, AppStateContainer>,
+    pubkey: String,
+) -> Result<(), String> {
+    let app = app_state.0.read().await;
+    let mut trust_guard = app.plugin_trust.write().await;
+    trust_guard.approve_user_key(pubkey);
+    trust_guard
+        .save_user_keys(app.memory_engine.db())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Remove a plugin directory from the plugins/ directory.
+#[tauri::command]
+pub async fn remove_plugin(
+    app_state: State<'_, AppStateContainer>,
+    plugin_id: String,
+) -> Result<(), String> {
+    let id_trimmed = plugin_id.trim();
+    crate::engine::plugin::PluginManifest::validate_id(id_trimmed)
+        .map_err(|e| e.to_string())?;
+
+    let app = app_state.0.read().await;
+    let target_dir = app.plugin_loader.plugins_dir.join(id_trimmed);
+    if target_dir.exists() {
+        tokio::fs::remove_dir_all(&target_dir)
+            .await
+            .map_err(|e| format!("Failed to delete plugin: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Execute a tool on a loaded plugin. [DR-039]
+#[tauri::command]
+pub async fn call_plugin_tool(
+    app_state: State<'_, AppStateContainer>,
+    plugin_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+) -> Result<String, String> {
+    let app = app_state.0.read().await;
+    let dev_mode = app.memory_engine.get_developer_mode().await.unwrap_or(false);
+
+    let loaded = app
+        .plugin_loader
+        .load_and_verify(&plugin_id, dev_mode)
+        .await
+        .map_err(|e| format!("Failed to verify plugin: {}", e))?;
+
+    let mut host = crate::engine::plugin::PluginHost::start(loaded)
+        .await
+        .map_err(|e| format!("Failed to start plugin host: {}", e))?;
+
+    let result = host
+        .call_tool(&tool_name, arguments, &app.permission_engine)
+        .await
+        .map_err(|e| format!("Plugin tool error: {}", e))?;
+
+    let _ = host.shutdown().await;
+    Ok(result)
+}
+

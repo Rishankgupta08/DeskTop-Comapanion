@@ -133,7 +133,7 @@ impl VoiceProvider for GroqVoiceProvider {
         let req_body = serde_json::json!({
             "model": GROQ_TTS_MODEL,
             "input": text,
-            "voice": "alloy",
+            "voice": "zoe",
             "response_format": "wav"
         });
 
@@ -174,11 +174,11 @@ pub async fn synthesize_system_fallback(text: &str) -> Result<AudioOutput, OpenM
         let text_owned = text.to_string();
 
         let status = tokio::task::spawn_blocking(move || {
-            // Try Samantha voice first (crisp high-quality voice on macOS)
+            // Try Ava voice first (natural high-quality modern voice on macOS)
             let s = std::process::Command::new("say")
                 .args([
                     "-v",
-                    "Samantha",
+                    "Ava",
                     "-o",
                     &path_str,
                     "--file-format=WAVE",

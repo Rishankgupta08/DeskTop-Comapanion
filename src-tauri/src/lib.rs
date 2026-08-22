@@ -130,6 +130,18 @@ pub fn run() {
             commands::generate_ambient_message,
             commands::set_window_layout_state,
             commands::start_window_drag,
+            // Avatar commands (Phase 3-A) [DR-036]
+            commands::get_active_avatar,
+            commands::set_active_avatar,
+            commands::list_avatars,
+            commands::get_avatar_image,
+            // Plugin commands (Phase 3-D) [DR-039 through DR-044]
+            commands::get_developer_mode,
+            commands::set_developer_mode,
+            commands::list_plugins,
+            commands::approve_plugin_key,
+            commands::remove_plugin,
+            commands::call_plugin_tool,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to start OpenMate");
@@ -143,7 +155,7 @@ pub fn run() {
 /// 3. Initialize PermissionEngine (security layer first)
 /// 4. Initialize MemoryEngine
 /// 5. Initialize AI Provider (needed by ContextEngine)
-/// 6. Initialize ContextEngine, ModeEngine, ToolEngine
+/// 6. Initialize ContextEngine, ModeEngine, ToolEngine, AvatarLoader, PluginLoader
 /// 7. Compose AppState
 async fn initialize_engines(
     db_path: std::path::PathBuf,
@@ -158,6 +170,7 @@ async fn initialize_engines(
 
     // Clone connection handles — tokio-rusqlite Connection is Arc-based.
     let db_for_permissions = db.clone();
+    let db_for_trust = db.clone();
 
     // ── 3. Permission Engine (security first) ────────────────────────────
     let permission_engine = Arc::new(PermissionEngine::new(db_for_permissions).await?);
@@ -184,6 +197,43 @@ async fn initialize_engines(
 
     let tool_engine = Arc::new(ToolEngine::new(Arc::clone(&permission_engine)));
 
+    // Resolve avatars directory: default to `avatars/` in project / executable dir
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut avatars_dir = cwd.join("avatars");
+    let mut plugins_dir = cwd.join("plugins");
+    if !avatars_dir.exists() && cwd.ends_with("src-tauri") {
+        if let Some(parent) = cwd.parent() {
+            let parent_avatars = parent.join("avatars");
+            if parent_avatars.exists() {
+                avatars_dir = parent_avatars;
+            }
+            let parent_plugins = parent.join("plugins");
+            if parent_plugins.exists() {
+                plugins_dir = parent_plugins;
+            }
+        }
+    }
+    if !avatars_dir.exists() {
+        let _ = std::fs::create_dir_all(&avatars_dir);
+    }
+    if !plugins_dir.exists() {
+        let _ = std::fs::create_dir_all(&plugins_dir);
+    }
+
+    let avatar_loader = Arc::new(crate::engine::avatar::AvatarLoader::new(avatars_dir));
+
+    // Initialize Plugin Trust Registry & Loader
+    let trust_registry = match crate::engine::plugin::TrustRegistry::load_with_db(&db_for_trust).await {
+        Ok(t) => t,
+        Err(_) => crate::engine::plugin::TrustRegistry::load_bundled()
+            .map_err(|e| crate::error::OpenMateError::Internal(e.to_string()))?,
+    };
+    let plugin_trust = Arc::new(tokio::sync::RwLock::new(trust_registry));
+    let plugin_loader = Arc::new(crate::engine::plugin::PluginLoader::new(
+        plugins_dir,
+        Arc::clone(&plugin_trust),
+    ));
+
     // ── 7. Compose state ─────────────────────────────────────────────────
     let mut state = AppState::new(
         permission_engine,
@@ -191,6 +241,9 @@ async fn initialize_engines(
         mode_engine,
         context_engine,
         tool_engine,
+        avatar_loader,
+        plugin_loader,
+        plugin_trust,
         ai_provider,
         voice_provider,
     );

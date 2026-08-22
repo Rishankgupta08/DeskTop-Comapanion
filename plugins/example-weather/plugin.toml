@@ -1,0 +1,22 @@
+[plugin]
+id = "example-weather"
+name = "Weather Companion"
+version = "1.0.0"
+author = "OpenMate Team"
+author_pubkey = "ed25519:0e96db332fb501ad36592e80ad28e368ddc8c4f67878bf8e8fe9421c6fb87787"
+description = "Example plugin showing OpenMate plugin structure"
+openmate_version = ">=0.1.0"
+
+[capabilities]
+required = ["network_access"]
+optional = []
+
+[entrypoint]
+macos_arm64 = "bin/plugin-darwin-arm64"
+macos_x86_64 = "bin/plugin-darwin-x86_64"
+windows_x86_64 = "bin/plugin-windows-x86_64.exe"
+
+[[tools]]
+name = "get_weather"
+description = "Get current weather for a city"
+parameters = { type = "object", properties = { city = { type = "string" } }, required = ["city"] }

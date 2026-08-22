@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "src-tauri",
+    "openmate-cli",
+    "plugins/example-weather",
+]
+resolver = "2"

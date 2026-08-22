@@ -1,8 +1,8 @@
 {
-  "name": "default",
+  "name": "cyber-cat",
   "version": "1.0.0",
-  "author": "OpenMate",
-  "description": "Built-in OpenMate cat companion",
+  "author": "CyberDev",
+  "description": "A sleek neon cyberpunk companion.",
   "type": "avatar",
   "states": ["idle", "thinking", "talking", "happy", "concerned", "listening"],
   "openmate_version": ">=0.1.0"

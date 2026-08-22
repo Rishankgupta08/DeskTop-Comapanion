@@ -30,6 +30,7 @@ import MessageBubble from "./components/avatar/MessageBubble";
 import ChatPanel, { detectSentiment } from "./components/chat/ChatPanel";
 import Settings from "./components/settings/Settings";
 import { initializeWindowLayout, setWindowLayoutState } from "./utils/windowLayout";
+import { modeLoader } from "./engine/mode-loader";
 
 // Ambient messages pools by time of day [Feature 2.2, Step 2]
 const AMBIENT_MESSAGES = {
@@ -262,7 +263,18 @@ export default function App() {
             if (!chosenMessage) {
               const hour = new Date().getHours();
               const poolKey = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
-              const pool = AMBIENT_MESSAGES[poolKey];
+
+              let customPool: string[] | undefined;
+              try {
+                const ext = await modeLoader.loadExtension(currentMode);
+                if (ext.ambientMessages && ext.ambientMessages[poolKey]?.length > 0) {
+                  customPool = ext.ambientMessages[poolKey];
+                }
+              } catch {
+                // Built-in mode or extension without ambient pool
+              }
+
+              const pool = customPool || AMBIENT_MESSAGES[poolKey];
               chosenMessage = pool[Math.floor(Math.random() * pool.length)];
             }
 

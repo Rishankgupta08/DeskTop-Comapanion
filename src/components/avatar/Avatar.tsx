@@ -9,8 +9,10 @@
  * [ADR-003, DR-016, Fix-2]
  */
 
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AvatarState } from "../../types";
+import { getActiveAvatar, getAvatarImage } from "../../hooks/useIpc";
 import { startNativeDrag } from "../../utils/windowLayout";
 
 interface AvatarProps {
@@ -258,6 +260,57 @@ export default function Avatar({
   const borderColor = isConcerned ? "#ef4444" : "#6366f1";
   const earColor = isConcerned ? "#7f1d1d" : "#6366f1";
 
+  const [avatarMode, setAvatarMode] = useState<"builtin" | "package">("builtin");
+  const [packageImages, setPackageImages] = useState<Record<string, string>>({});
+
+  const loadActiveAvatar = useCallback(async () => {
+    try {
+      const activeName = await getActiveAvatar();
+      if (!activeName || activeName === "default" || activeName === "builtin") {
+        setAvatarMode("builtin");
+        setPackageImages({});
+        return;
+      }
+
+      // Load all 6 states for custom package
+      const states: AvatarState[] = ["idle", "thinking", "talking", "happy", "concerned", "listening"];
+      const images: Record<string, string> = {};
+      for (const st of states) {
+        try {
+          const rawBase64 = await getAvatarImage(activeName, st);
+          const dataUrl = rawBase64.startsWith("data:")
+            ? rawBase64
+            : `data:image/png;base64,${rawBase64}`;
+          images[st] = dataUrl;
+        } catch (err) {
+          console.warn(`Failed to load avatar state image ${st}:`, err);
+        }
+      }
+
+      if (Object.keys(images).length === 6) {
+        setPackageImages(images);
+        setAvatarMode("package");
+      } else {
+        setAvatarMode("builtin");
+      }
+    } catch {
+      setAvatarMode("builtin");
+    }
+  }, []);
+
+  useEffect(() => {
+    loadActiveAvatar();
+
+    const handleAvatarChange = () => {
+      loadActiveAvatar();
+    };
+
+    window.addEventListener("openmate-avatar-changed", handleAvatarChange);
+    return () => {
+      window.removeEventListener("openmate-avatar-changed", handleAvatarChange);
+    };
+  }, [loadActiveAvatar]);
+
   return (
     <motion.div
       data-tauri-drag-region
@@ -335,38 +388,54 @@ export default function Avatar({
           boxShadow: "0 8px 32px rgba(0,0,0,0.55)",
         }}
       >
-        {/* Cat SVG canvas — viewBox spans 0 0 64 64, ears extend above */}
-        <AnimatePresence mode="wait">
-          <motion.svg
-            key={currentState}
-            viewBox="0 0 64 64"
-            width={72}
-            height={72}
-            initial={{ opacity: 0, scale: 0.88 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.88 }}
-            transition={{ duration: 0.18 }}
-            overflow="visible"
-            style={{ display: "block" }}
-          >
-            {/* Head circle */}
-            <circle cx="32" cy="38" r="22" fill={headColor} />
+        {avatarMode === "builtin" ? (
+          /* Cat SVG canvas — viewBox spans 0 0 64 64, ears extend above */
+          <AnimatePresence mode="wait">
+            <motion.svg
+              key={currentState}
+              viewBox="0 0 64 64"
+              width={72}
+              height={72}
+              initial={{ opacity: 0, scale: 0.88 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.88 }}
+              transition={{ duration: 0.18 }}
+              overflow="visible"
+              style={{ display: "block" }}
+            >
+              {/* Head circle */}
+              <circle cx="32" cy="38" r="22" fill={headColor} />
 
-            {/* Ears */}
-            <g transform="translate(2, 2)">
-              <EarLeft color={earColor} />
-              <EarRight color={earColor} />
-            </g>
+              {/* Ears */}
+              <g transform="translate(2, 2)">
+                <EarLeft color={earColor} />
+                <EarRight color={earColor} />
+              </g>
 
-            {/* Face expression */}
-            {currentState === "idle" && <IdleFace />}
-            {currentState === "thinking" && <ThinkingFace />}
-            {currentState === "talking" && <TalkingFace />}
-            {currentState === "happy" && <HappyFace />}
-            {currentState === "concerned" && <ConcernedFace />}
-            {currentState === "listening" && <ListeningFace />}
-          </motion.svg>
-        </AnimatePresence>
+              {/* Face expression */}
+              {currentState === "idle" && <IdleFace />}
+              {currentState === "thinking" && <ThinkingFace />}
+              {currentState === "talking" && <TalkingFace />}
+              {currentState === "happy" && <HappyFace />}
+              {currentState === "concerned" && <ConcernedFace />}
+              {currentState === "listening" && <ListeningFace />}
+            </motion.svg>
+          </AnimatePresence>
+        ) : (
+          <AnimatePresence mode="wait">
+            <motion.img
+              key={currentState}
+              src={packageImages[currentState] || packageImages["idle"]}
+              alt={`Avatar ${currentState}`}
+              initial={{ opacity: 0, scale: 0.88 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.88 }}
+              transition={{ duration: 0.18 }}
+              className="w-full h-full object-contain rounded-full select-none pointer-events-none p-1"
+              draggable={false}
+            />
+          </AnimatePresence>
+        )}
 
         {/* Status dot */}
         <span

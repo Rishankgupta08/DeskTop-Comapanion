@@ -1,0 +1,9 @@
+{
+  "name": "Study Buddy",
+  "id": "study-buddy",
+  "version": "1.0.0",
+  "author": "OpenMate Team",
+  "description": "Helps you focus and study",
+  "icon": "📚",
+  "openmate_version": ">=0.1.0"
+}

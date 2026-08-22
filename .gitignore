@@ -43,8 +43,7 @@ src-tauri/Frameworks/
 gen/
 
 # ─── Rust ──────────────────────────────────────────────────────────────────────
-**/*.rs.bk
-Cargo.lock                  # keep for binaries; remove this line if lib-only
+**/*.rs.bk       # keep for binaries; remove this line if lib-only
 
 # ─── Logs ─────────────────────────────────────────────────────────────────────
 # Local crash/error logs are permitted [DR-028] but should not be committed
@@ -76,13 +75,3 @@ openmate.db-wal
 *.screenshot.png
 *.screenshot.jpg
 capture-debug/
-
-# ─── Audio artifacts ──────────────────────────────────────────────────────────
-# Audio buffers are in-memory only. Block any temporary playback/record files.
-*.wav
-*.aiff
-*.mp3
-*.m4a
-*.ogg
-openmate_tts_*
-

@@ -25,8 +25,23 @@ import {
   setCompanionName,
   getUserName,
   setUserName,
+  listAvatars,
+  setActiveAvatar,
+  getDeveloperMode,
+  setDeveloperMode,
+  listPlugins,
+  approvePluginKey,
+  removePlugin,
 } from "../../hooks/useIpc";
-import type { Capability, PermissionState, PermissionStatus, MemoryEntry, ProactiveMode } from "../../types";
+import type {
+  AvatarInfo,
+  Capability,
+  PermissionState,
+  PermissionStatus,
+  MemoryEntry,
+  ProactiveMode,
+  PluginInfo,
+} from "../../types";
 import MemoryPanel from "../memory/MemoryPanel";
 
 interface SettingsProps {
@@ -62,7 +77,17 @@ export default function Settings({
   // 4.3 Proactive Assistance State [DR-017]
   const [proactiveMode, setProactiveModeState] = useState<ProactiveMode>("subtle");
 
-  // 4.4 Memory State
+  // 4.4 Avatar State [Phase 3-A]
+  const [avatars, setAvatars] = useState<AvatarInfo[]>([]);
+  const [activatingAvatar, setActivatingAvatar] = useState<string | null>(null);
+
+  // 4.5 Plugin State [Phase 3-D]
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const [developerMode, setDeveloperModeState] = useState(false);
+  const [showDevModeModal, setShowDevModeModal] = useState(false);
+  const [enabledPlugins, setEnabledPlugins] = useState<Record<string, boolean>>({});
+
+  // 4.6 Memory State
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [isMemoryExpanded, setIsMemoryExpanded] = useState(false);
   const [confirmClearHistory, setConfirmClearHistory] = useState(false);
@@ -84,6 +109,15 @@ export default function Settings({
 
       const pMode = await getProactiveMode();
       setProactiveModeState(pMode);
+
+      const avatarList = await listAvatars();
+      setAvatars(avatarList);
+
+      const devMode = await getDeveloperMode();
+      setDeveloperModeState(devMode);
+
+      const pluginList = await listPlugins();
+      setPlugins(pluginList);
 
       const mems = await getMemories();
       setMemories(mems);
@@ -250,6 +284,62 @@ export default function Settings({
           Done
         </button>
       </div>
+
+      {/* Developer Mode Persistent Warning Banner [DR-043] */}
+      {developerMode && (
+        <div className="mb-6 bg-amber-500/15 border border-amber-500/40 rounded-2xl p-4 flex items-center gap-3 text-amber-300 text-xs">
+          <span className="text-lg">⚠</span>
+          <div>
+            <span className="font-semibold block">Developer Mode is on. Unsigned plugins are allowed.</span>
+            <p className="text-amber-300/80 mt-0.5">
+              Only run plugins you built yourself. Every tool execution requires confirmation.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Developer Mode Confirmation Dialog Modal [DR-043] */}
+      {showDevModeModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+          <div className="bg-surface-elevated border border-surface-border rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-amber-400">
+              <span className="text-2xl">⚠</span>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                Enable Developer Mode?
+              </h3>
+            </div>
+            <p className="text-xs text-neutral-300 leading-relaxed">
+              Developer Mode allows plugins without signatures.
+              Only enable this if you are building or testing your own plugins.
+              Never enable this for plugins from untrusted sources.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDevModeModal(false)}
+                className="px-3 py-1.5 rounded-xl border border-surface-border text-neutral-300 text-xs font-medium hover:bg-surface-card"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await setDeveloperMode(true);
+                    setDeveloperModeState(true);
+                    setShowDevModeModal(false);
+                  } catch (err) {
+                    console.error("Failed to enable developer mode:", err);
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-semibold text-xs"
+              >
+                Enable Developer Mode
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-6 flex-1 pb-12">
         {/* COMPANION IDENTITY Section [Feature 1.1] */}
@@ -732,28 +822,335 @@ export default function Settings({
           </div>
         </section>
 
-        {/* 4.4 Avatar Section */}
+        {/* 4.4 Avatar Section [Phase 3-A, DR-036] */}
         <section className="bg-surface-elevated border border-surface-border rounded-2xl p-5 space-y-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400">
-            Avatar
-          </h2>
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-surface-card border border-accent flex items-center justify-center text-accent">
-              <svg viewBox="0 0 36 36" className="w-7 h-7 fill-none">
-                <circle cx="18" cy="18" r="14" className="stroke-accent" strokeWidth="2" />
-                <circle cx="13" cy="16" r="2" className="fill-white" />
-                <circle cx="23" cy="16" r="2" className="fill-white" />
-                <path d="M14 22 Q18 25 22 22" className="stroke-white" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </div>
-            <div>
-              <span className="text-xs font-medium text-white block">Default Sprite</span>
-              <p className="text-xs text-neutral-400">Standard 2D animated desktop avatar.</p>
-            </div>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400">
+              Avatar
+            </h2>
+            <span className="text-xs text-neutral-400 font-medium">
+              {avatars.length} available
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {avatars.map((avatar) => {
+              const isDefault = avatar.name === "default";
+              const displayName = isDefault ? "Built-in Cat" : avatar.name;
+              const isActivating = activatingAvatar === avatar.name;
+
+              return (
+                <div
+                  key={avatar.name}
+                  className={`flex items-center justify-between gap-3 p-3.5 rounded-xl border transition-colors ${
+                    avatar.is_active
+                      ? "bg-accent/10 border-accent/60"
+                      : "bg-surface-card border-surface-border hover:border-neutral-700"
+                  }`}
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    {/* Avatar thumbnail icon */}
+                    <div
+                      className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center border ${
+                        avatar.is_active
+                          ? "bg-accent/20 border-accent text-accent-light"
+                          : "bg-darkBg border-surface-border text-neutral-400"
+                      }`}
+                    >
+                      {isDefault ? (
+                        <svg viewBox="0 0 36 36" className="w-6 h-6 fill-none">
+                          <circle cx="18" cy="18" r="14" className="stroke-current" strokeWidth="2" />
+                          <circle cx="13" cy="16" r="2" className="fill-white" />
+                          <circle cx="23" cy="16" r="2" className="fill-white" />
+                          <path
+                            d="M14 22 Q18 25 22 22"
+                            className="stroke-white"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="w-5 h-5 fill-none stroke-current"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <circle cx="12" cy="8" r="5" />
+                          <path d="M20 21a8 8 0 0 0-16 0" />
+                        </svg>
+                      )}
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-white truncate">
+                          {displayName}
+                        </span>
+                        {avatar.author && (
+                          <span className="text-[10px] text-neutral-400 flex-shrink-0">
+                            by {avatar.author}
+                          </span>
+                        )}
+                        {avatar.is_active && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full font-medium bg-accent text-white">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-neutral-400 truncate mt-0.5">
+                        {avatar.description || "Custom avatar package"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    {avatar.is_active ? (
+                      <span className="text-xs font-medium text-accent-light px-3 py-1.5">
+                        Active
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isActivating}
+                        onClick={async () => {
+                          setActivatingAvatar(avatar.name);
+                          try {
+                            await setActiveAvatar(avatar.name);
+                            setAvatars((prev) =>
+                              prev.map((a) => ({
+                                ...a,
+                                is_active: a.name === avatar.name,
+                              }))
+                            );
+                            window.dispatchEvent(new CustomEvent("openmate-avatar-changed"));
+                          } catch (err) {
+                            console.error("Failed to activate avatar:", err);
+                          } finally {
+                            setActivatingAvatar(null);
+                          }
+                        }}
+                        className="py-1.5 px-3 bg-surface-card hover:bg-surface-border border border-surface-border text-neutral-200 text-xs font-medium rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none whitespace-nowrap"
+                      >
+                        {isActivating ? "Activating..." : "Use this avatar"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="text-xs text-neutral-400 bg-surface-card/60 p-3 rounded-xl border border-surface-border/80">
+            <p>
+              To add community avatars, place them in the <code className="text-accent-light font-mono">avatars/</code> folder in the OpenMate directory.
+            </p>
           </div>
         </section>
 
-        {/* 4.4 Memory Section */}
+        {/* 4.4 Native Tool Plugins Section [Phase 3-D, DR-039 through DR-044] */}
+        <section className="bg-surface-elevated border border-surface-border rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400">
+              Native Tool Plugins
+            </h2>
+            <span className="text-xs text-neutral-400 font-medium">
+              {plugins.length} installed
+            </span>
+          </div>
+
+          {/* Developer Mode Toggle */}
+          <div className="flex items-center justify-between p-3.5 bg-surface-card rounded-xl border border-surface-border">
+            <div>
+              <span className="text-xs font-semibold text-white block">
+                Developer Mode (Unsigned Plugins)
+              </span>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Allow loading local experimental plugins without signatures.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!developerMode) {
+                  setShowDevModeModal(true);
+                } else {
+                  try {
+                    await setDeveloperMode(false);
+                    setDeveloperModeState(false);
+                  } catch (err) {
+                    console.error("Failed to disable developer mode:", err);
+                  }
+                }
+              }}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                developerMode ? "bg-amber-500" : "bg-darkBg border border-surface-border"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  developerMode ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Plugin List */}
+          <div className="space-y-3">
+            {plugins.length === 0 ? (
+              <div className="text-center py-6 text-neutral-500 text-xs bg-surface-card/40 rounded-xl border border-surface-border/60">
+                No native plugins installed yet.
+              </div>
+            ) : (
+              plugins.map((plugin) => {
+                const badgeClass =
+                  plugin.trust_level === "builtin"
+                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                    : plugin.trust_level === "community"
+                    ? "bg-sky-500/20 text-sky-300 border-sky-500/40"
+                    : plugin.trust_level === "user_approved"
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                    : "bg-rose-500/20 text-rose-300 border-rose-500/40";
+
+                const badgeLabel =
+                  plugin.trust_level === "builtin"
+                    ? "OpenMate"
+                    : plugin.trust_level === "community"
+                    ? "Community Verified"
+                    : plugin.trust_level === "user_approved"
+                    ? "User Approved"
+                    : "Unsigned";
+
+                const trustExplanation =
+                  plugin.trust_level === "builtin"
+                    ? "Built-in core native tool"
+                    : plugin.trust_level === "community"
+                    ? "Signature verified against OpenMate's trusted registry"
+                    : plugin.trust_level === "user_approved"
+                    ? "You manually approved this author's signature"
+                    : "This plugin has no verified signature. Only enable if you built it.";
+
+                const isEnabled = enabledPlugins[plugin.id] ?? true;
+
+                return (
+                  <div
+                    key={plugin.id}
+                    className="p-4 rounded-xl border border-surface-border bg-surface-card space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-semibold text-white">
+                            {plugin.name}
+                          </span>
+                          <span className="text-[10px] text-neutral-400 font-mono">
+                            v{plugin.version}
+                          </span>
+                          <span className="text-[10px] text-neutral-400">
+                            by {plugin.author}
+                          </span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${badgeClass}`}
+                          >
+                            {badgeLabel}
+                          </span>
+                        </div>
+                        <p className="text-xs text-neutral-300 mt-1">
+                          {plugin.description}
+                        </p>
+                        <p className="text-[11px] text-neutral-500 mt-1 italic">
+                          {trustExplanation}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {developerMode && plugin.trust_level === "unknown" && plugin.author_pubkey && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await approvePluginKey(plugin.author_pubkey);
+                                const updated = await listPlugins();
+                                setPlugins(updated);
+                              } catch (err) {
+                                console.error("Failed to approve key:", err);
+                              }
+                            }}
+                            className="text-xs px-2 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 font-medium transition-colors"
+                            title="Approve Author Public Key"
+                          >
+                            Trust Author
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEnabledPlugins((prev) => ({
+                              ...prev,
+                              [plugin.id]: !isEnabled,
+                            }))
+                          }
+                          className={`text-xs px-2.5 py-1 rounded-lg border font-medium transition-colors ${
+                            isEnabled
+                              ? "bg-accent/20 border-accent text-accent-light"
+                              : "bg-darkBg border-surface-border text-neutral-400"
+                          }`}
+                        >
+                          {isEnabled ? "Enabled" : "Disabled"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await removePlugin(plugin.id);
+                              setPlugins((prev) =>
+                                prev.filter((p) => p.id !== plugin.id)
+                              );
+                            } catch (err) {
+                              console.error("Failed to remove plugin:", err);
+                            }
+                          }}
+                          className="text-xs p-1 text-neutral-500 hover:text-rose-400 transition-colors"
+                          title="Remove Plugin"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    {plugin.tools.length > 0 && (
+                      <div className="pt-2 border-t border-surface-border/60 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] uppercase font-semibold text-neutral-500">
+                          Tools:
+                        </span>
+                        {plugin.tools.map((tool) => (
+                          <span
+                            key={tool.name}
+                            className="text-[10px] bg-darkBg border border-surface-border px-2 py-0.5 rounded font-mono text-neutral-300"
+                            title={tool.description}
+                          >
+                            {tool.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="text-xs text-neutral-400 bg-surface-card/60 p-3 rounded-xl border border-surface-border/80">
+            <p>
+              To install a plugin, place its folder in the <code className="text-accent-light font-mono">plugins/</code> folder in the OpenMate directory. Then restart OpenMate.
+            </p>
+          </div>
+        </section>
+
+        {/* 4.5 Memory Section */}
         <section className="bg-surface-elevated border border-surface-border rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400">

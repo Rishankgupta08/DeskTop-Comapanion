@@ -9,7 +9,7 @@
  * [SRS FR-020, DR-005, DR-015, DR-029, DR-032, DR-033]
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   sendMessage,
@@ -18,8 +18,12 @@ import {
   executeTool,
   setPermission,
   startVoiceInput,
+  getCompanionName,
+  getUserName,
+  getMemories,
 } from "../../hooks/useIpc";
-import type { CompanionMode, ChatMessage, AvatarState } from "../../types";
+import { modeLoader } from "../../engine/mode-loader";
+import type { CompanionMode, ChatMessage, AvatarState, ModeManifest } from "../../types";
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -32,18 +36,11 @@ interface ChatPanelProps {
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }
 
-const MODE_DESCRIPTIONS: Record<CompanionMode, string> = {
-  play: "Let's hang out",
-  coder: "Help with your code",
-  assistant: "Get things done",
-  personal_friend: "Just talk",
-};
-
-const MODE_OPTIONS: { id: CompanionMode; label: string }[] = [
-  { id: "play", label: "Play" },
-  { id: "coder", label: "Coder" },
-  { id: "assistant", label: "Assistant" },
-  { id: "personal_friend", label: "Friend" },
+const BUILTIN_OPTIONS: { id: CompanionMode; label: string; description: string; icon?: string }[] = [
+  { id: "play", label: "Play", description: "Let's hang out" },
+  { id: "coder", label: "Coder", description: "Help with your code" },
+  { id: "assistant", label: "Assistant", description: "Get things done" },
+  { id: "personal_friend", label: "Friend", description: "Just talk" },
 ];
 
 interface PendingWrite {
@@ -189,9 +186,33 @@ export default function ChatPanel({
   const [resolvedWrites, setResolvedWrites] = useState<Record<string, "allowed" | "denied">>({});
   const [fileConflicts, setFileConflicts] = useState<Record<string, FileConflict>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [extensionManifests, setExtensionManifests] = useState<ModeManifest[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load extension modes on mount
+  useEffect(() => {
+    modeLoader
+      .scanExtensions()
+      .then((exts) => setExtensionManifests(exts))
+      .catch((err) => console.warn("Failed to scan mode extensions:", err));
+  }, []);
+
+  // Compute merged mode options (built-in 4 first, then extensions)
+  const allModeOptions = useMemo(() => {
+    const extOptions = extensionManifests.map((m) => ({
+      id: m.id,
+      label: m.name,
+      description: m.description,
+      icon: m.icon,
+    }));
+    return [...BUILTIN_OPTIONS, ...extOptions];
+  }, [extensionManifests]);
+
+  const currentModeInfo = useMemo(() => {
+    return allModeOptions.find((m) => m.id === currentMode) || BUILTIN_OPTIONS[2];
+  }, [allModeOptions, currentMode]);
 
   // Auto-scroll to newest message
   useEffect(() => {
@@ -210,7 +231,7 @@ export default function ChatPanel({
     if (mode === currentMode) return;
     onModeChange(mode);
     try {
-      await setModeIpc(mode);
+      await setModeIpc(mode as any);
     } catch {
       // Non-blocking mode switch
     }
@@ -476,9 +497,30 @@ export default function ChatPanel({
         lower.includes("whats on") ||
         lower.includes("what do you see");
 
+      let promptToSend = text;
+      const isBuiltin = ["play", "coder", "assistant", "personal_friend"].includes(currentMode);
+
+      if (!isBuiltin) {
+        try {
+          const ext = await modeLoader.loadExtension(currentMode);
+          const compName = await getCompanionName().catch(() => "OpenMate");
+          const uName = await getUserName().catch(() => "");
+          const mems = await getMemories().catch(() => []);
+          const systemPrompt = ext.buildSystemPrompt({
+            companionName: compName || "OpenMate",
+            userName: uName || "",
+            memories: mems.map((m) => m.content),
+            currentTime: new Date().toLocaleTimeString(),
+          });
+          promptToSend = `[Custom Persona for ${ext.manifest.name} mode]:\n${systemPrompt}\n\n${text}`;
+        } catch (err) {
+          console.warn("Failed to apply custom mode system prompt:", err);
+        }
+      }
+
       const response = isScreenQuery
         ? await requestScreenContext(text)
-        : await sendMessage(text, currentMode);
+        : await sendMessage(promptToSend, isBuiltin ? currentMode : undefined);
 
       const msgId = crypto.randomUUID();
       const assistantMessage: ChatMessage = {
@@ -530,7 +572,7 @@ export default function ChatPanel({
       className="absolute top-3 left-3 w-[396px] h-[520px] bg-surface-elevated border border-surface-border rounded-2xl shadow-2xl flex flex-col z-40 overflow-hidden"
       style={{ pointerEvents: "auto" }}
     >
-      {/* Header with Mode Tabs */}
+      {/* Header with Mode Tabs / Dropdown */}
       <div className="p-3 border-b border-surface-border bg-surface-card flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
@@ -562,27 +604,44 @@ export default function ChatPanel({
           </div>
         </div>
 
-        {/* Mode Tabs */}
-        <div className="grid grid-cols-4 gap-1 bg-darkBg p-1 rounded-xl border border-surface-border">
-          {MODE_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              onClick={() => handleModeSelect(opt.id)}
-              className={`py-1.5 px-2 text-xs font-medium rounded-lg transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
-                currentMode === opt.id
-                  ? "bg-accent text-white shadow-sm"
-                  : "text-neutral-400 hover:text-neutral-200 hover:bg-surface-elevated"
-              }`}
+        {/* Mode Selector: Tabs if <= 6 modes, Dropdown if > 6 modes */}
+        {allModeOptions.length <= 6 ? (
+          <div className="flex gap-1 bg-darkBg p-1 rounded-xl border border-surface-border overflow-x-auto">
+            {allModeOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => handleModeSelect(opt.id)}
+                className={`py-1.5 px-2 text-xs font-medium rounded-lg transition-colors flex-1 whitespace-nowrap text-center focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
+                  currentMode === opt.id
+                    ? "bg-accent text-white shadow-sm"
+                    : "text-neutral-400 hover:text-neutral-200 hover:bg-surface-elevated"
+                }`}
+              >
+                {opt.icon ? `${opt.icon} ` : ""}{opt.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="relative">
+            <select
+              value={currentMode}
+              aria-label="Select companion mode"
+              onChange={(e) => handleModeSelect(e.target.value as CompanionMode)}
+              className="w-full py-1.5 px-3 bg-darkBg border border-surface-border rounded-xl text-xs font-medium text-white focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none cursor-pointer"
             >
-              {opt.label}
-            </button>
-          ))}
-        </div>
+              {allModeOptions.map((opt) => (
+                <option key={opt.id} value={opt.id} className="bg-darkBg text-white">
+                  {opt.icon ? `${opt.icon} ` : ""}{opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Mode description */}
         <p className="text-[11px] text-neutral-400 text-center italic">
-          {MODE_DESCRIPTIONS[currentMode]}
+          {currentModeInfo.description}
         </p>
       </div>
 
@@ -591,7 +650,7 @@ export default function ChatPanel({
         {messages.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-center p-4 text-neutral-500 text-xs">
             <p>
-              Start talking to OpenMate in {MODE_OPTIONS.find((m) => m.id === currentMode)?.label} mode.
+              Start talking to OpenMate in {currentModeInfo.label} mode.
             </p>
           </div>
         )}

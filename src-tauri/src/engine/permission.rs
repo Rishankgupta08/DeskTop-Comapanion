@@ -57,8 +57,8 @@ pub enum Capability {
     FilesystemWrite,
     AppLaunch,
     Clipboard,
-    // Reserved — not in V1 [DR-030]:
-    // Terminal,
+    NetworkAccess,
+    PluginExecution,
 }
 
 impl Capability {
@@ -71,6 +71,8 @@ impl Capability {
             Capability::FilesystemWrite => "Write Files",
             Capability::AppLaunch => "Launch Applications",
             Capability::Clipboard => "Clipboard Access",
+            Capability::NetworkAccess => "Network Access (Plugins)",
+            Capability::PluginExecution => "Plugin Execution",
         }
     }
 
@@ -99,6 +101,12 @@ impl Capability {
                 "Allows OpenMate to notice when you copy content. \
                  Content is never sent to Gemini unless you ask."
             }
+            Capability::NetworkAccess => {
+                "Allows community plugins to make external network and HTTP requests."
+            }
+            Capability::PluginExecution => {
+                "Master switch allowing OpenMate to load and execute verified external plugins."
+            }
         }
     }
 
@@ -111,6 +119,23 @@ impl Capability {
             Capability::FilesystemWrite => "filesystem_write",
             Capability::AppLaunch => "app_launch",
             Capability::Clipboard => "clipboard",
+            Capability::NetworkAccess => "network_access",
+            Capability::PluginExecution => "plugin_execution",
+        }
+    }
+
+    /// Match a string capability name to its enum variant.
+    pub fn from_str_name(name: &str) -> Option<Capability> {
+        match name.trim().to_lowercase().as_str() {
+            "screen_capture" | "screencapture" => Some(Capability::ScreenCapture),
+            "microphone" => Some(Capability::Microphone),
+            "filesystem_read" | "filesystemread" => Some(Capability::FilesystemRead),
+            "filesystem_write" | "filesystemwrite" => Some(Capability::FilesystemWrite),
+            "app_launch" | "applaunch" => Some(Capability::AppLaunch),
+            "clipboard" => Some(Capability::Clipboard),
+            "network_access" | "networkaccess" => Some(Capability::NetworkAccess),
+            "plugin_execution" | "pluginexecution" => Some(Capability::PluginExecution),
+            _ => None,
         }
     }
 
@@ -123,6 +148,8 @@ impl Capability {
             Capability::FilesystemWrite,
             Capability::AppLaunch,
             Capability::Clipboard,
+            Capability::NetworkAccess,
+            Capability::PluginExecution,
         ]
     }
 }
@@ -331,6 +358,30 @@ impl PermissionEngine {
             .get(capability)
             .cloned()
             .unwrap_or(PermissionState::Off)
+    }
+
+    /// Alias for `get_state`.
+    pub async fn get(&self, capability: &Capability) -> PermissionState {
+        self.get_state(capability).await
+    }
+
+    /// Return current permission states for a list of capability strings declared by a plugin.
+    pub async fn capabilities_for_plugin(
+        &self,
+        _plugin_id: &str,
+        required: &[String],
+    ) -> HashMap<String, PermissionState> {
+        let states = self.states.read().await;
+        let mut result = HashMap::new();
+        for cap_str in required {
+            if let Some(cap) = Capability::from_str_name(cap_str) {
+                let state = states.get(&cap).cloned().unwrap_or(PermissionState::Off);
+                result.insert(cap_str.clone(), state);
+            } else {
+                result.insert(cap_str.clone(), PermissionState::Off);
+            }
+        }
+        result
     }
 
     /// Get the current state of all V1 capabilities.

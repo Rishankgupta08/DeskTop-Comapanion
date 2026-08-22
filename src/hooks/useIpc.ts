@@ -10,12 +10,14 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AvatarInfo,
   Capability,
   CompanionMode,
   ConversationMessage,
   MemoryEntry,
   PermissionState,
   PermissionStatus,
+  PluginInfo,
 } from "../types";
 
 // ── Centralized IPC Helper with Safe Error Normalization ──────────────────────
@@ -242,3 +244,82 @@ export async function setUserName(name: string): Promise<void> {
 export async function generateAmbientMessage(): Promise<string> {
   return ipc<string>("generate_ambient_message");
 }
+
+// ── Avatar package commands (Phase 3-A) [DR-036] ─────────────────────────────
+
+export async function getActiveAvatar(): Promise<string> {
+  try {
+    return await ipc<string>("get_active_avatar");
+  } catch {
+    return "default";
+  }
+}
+
+export async function setActiveAvatar(name: string): Promise<void> {
+  return ipc<void>("set_active_avatar", { name });
+}
+
+export async function listAvatars(): Promise<AvatarInfo[]> {
+  try {
+    return await ipc<AvatarInfo[]>("list_avatars");
+  } catch {
+    return [
+      {
+        name: "default",
+        author: "OpenMate",
+        description: "Built-in OpenMate cat companion",
+        is_active: true,
+      },
+    ];
+  }
+}
+
+export async function getAvatarImage(
+  avatarName: string,
+  state: string
+): Promise<string> {
+  return ipc<string>("get_avatar_image", { avatarName, state });
+}
+
+// ── Plugin commands (Phase 3-D) [DR-039 through DR-044] ───────────────────────
+
+export async function getDeveloperMode(): Promise<boolean> {
+  try {
+    return await ipc<boolean>("get_developer_mode");
+  } catch {
+    return false;
+  }
+}
+
+export async function setDeveloperMode(enabled: boolean): Promise<void> {
+  return ipc<void>("set_developer_mode", { enabled });
+}
+
+export async function listPlugins(): Promise<PluginInfo[]> {
+  try {
+    return await ipc<PluginInfo[]>("list_plugins");
+  } catch {
+    return [];
+  }
+}
+
+export async function approvePluginKey(pubkey: string): Promise<void> {
+  return ipc<void>("approve_plugin_key", { pubkey });
+}
+
+export async function removePlugin(pluginId: string): Promise<void> {
+  return ipc<void>("remove_plugin", { pluginId });
+}
+
+export async function callPluginTool(
+  pluginId: string,
+  toolName: string,
+  args: Record<string, unknown> = {}
+): Promise<string> {
+  return ipc<string>("call_plugin_tool", {
+    pluginId,
+    toolName,
+    arguments: args,
+  });
+}
+
